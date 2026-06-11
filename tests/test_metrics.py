@@ -214,10 +214,55 @@ def test_dict_metric_uses_custom_aggregation():
     assert agg_metrics["pass@3,none"] == 1.5
 
 
+def test_acc_all_stderr_groups_by_paragraph_and_question():
+    """Regression test: ``acc_all_stderr`` must group answers by the same
+    ``(paragraph, question)`` unit as ``acc_all``.
+
+    MultiRC's ``idx["question"]`` is the question index *within* a paragraph, so
+    it is not globally unique. Grouping the stderr by ``question`` alone collides
+    questions that share a local index across different paragraphs, computing the
+    standard error over a different (and wrong) set of units than the point
+    estimate it accompanies.
+    """
+    from lm_eval.api.metrics import acc_all, acc_all_stderr, mean_stderr
+
+    def make(paragraph, question, label, pred):
+        # items are (pred, doc) pairs: acc_all reads preds=zip[0], docs=zip[1]
+        return (
+            pred,
+            {"idx": {"paragraph": paragraph, "question": question}, "label": label},
+        )
+
+    # Two paragraphs whose question indices (0, 1) collide across paragraphs.
+    items = [
+        make(0, 0, 1, True),
+        make(0, 0, 1, True),  # (0,0): all correct -> 1
+        make(0, 1, 1, True),
+        make(0, 1, 0, True),  # (0,1): one wrong   -> 0
+        make(1, 0, 1, False),
+        make(1, 0, 1, True),  # (1,0): one wrong   -> 0
+        make(1, 1, 1, True),
+        make(1, 1, 1, True),  # (1,1): all correct -> 1
+    ]
+
+    # acc_all already groups by (paragraph, question): 2 of 4 question-units correct.
+    assert acc_all(items) == 0.5
+
+    # The stderr must be the stderr of those same four 0/1 units...
+    expected = mean_stderr([1, 0, 0, 1])
+    assert acc_all_stderr(items) == expected
+
+    # ...and must be > 0: a 50% accuracy cannot have zero uncertainty, which is
+    # exactly what the buggy question-only grouping produced (all units collapse
+    # to 0, giving stderr 0.0).
+    assert acc_all_stderr(items) > 0.0
+
+
 if __name__ == "__main__":
     test_acc_mutual_info_slicing()
     test_acc_mutual_info_different_predictions()
     test_acc_mutual_info_without_metric()
     test_bootstrap_internal_no_mp()
     test_dict_metric_uses_custom_aggregation()
+    test_acc_all_stderr_groups_by_paragraph_and_question()
     print("All tests passed!")
