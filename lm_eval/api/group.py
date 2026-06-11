@@ -193,7 +193,11 @@ class Group:
             Aggregated metrics dict for this group:
             {"alias": str, "acc,none": float, "acc_stderr,none": float, "sample_len": int, ...}
         """
-        from lm_eval.api.metrics import aggregate_subtask_metrics, pooled_sample_stderr
+        from lm_eval.api.metrics import (
+            aggregate_subtask_metrics,
+            pooled_sample_stderr,
+            unweighted_sample_stderr,
+        )
 
         group_metrics: dict[str, Any] = {
             "alias": self.alias or self.name,
@@ -271,7 +275,17 @@ class Group:
                     sample_count[metric_key] = sum(sizes)
 
                     if len(stderrs) == len(values) and "N/A" not in stderrs:
-                        group_metrics[stderr_key] = pooled_sample_stderr(stderrs, sizes)
+                        # The stderr estimator must match the point estimate:
+                        # pooled (size-weighted) for weighted means, and the
+                        # unweighted-mean stderr otherwise.
+                        if agg_config.weight_by_size:
+                            group_metrics[stderr_key] = pooled_sample_stderr(
+                                stderrs, sizes
+                            )
+                        else:
+                            group_metrics[stderr_key] = unweighted_sample_stderr(
+                                stderrs
+                            )
                     else:
                         group_metrics[stderr_key] = "N/A"
 

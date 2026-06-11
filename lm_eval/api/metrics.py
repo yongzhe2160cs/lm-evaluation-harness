@@ -605,6 +605,20 @@ def pooled_sample_stderr(stderrs: List[float], sizes: List[int]):
     return np.sqrt(pooled_sample_var / sum(sizes))
 
 
+def unweighted_sample_stderr(stderrs: List[float]):
+    # Used to aggregate stderrs across subtasks in a group when the group score
+    # is the *unweighted* mean of the subtask scores (i.e. weight_by_size=False).
+    #
+    # With group score G = (1 / k) * sum_i mean_i over k independent subtasks,
+    #   Var(G) = (1 / k**2) * sum_i Var(mean_i) = (1 / k**2) * sum_i stderr_i**2,
+    # so the standard error is sqrt(sum_i stderr_i**2) / k. Using the
+    # size-weighted `pooled_sample_stderr` here would report the stderr of a
+    # *different* (size-weighted) estimator than the one actually aggregated,
+    # understating uncertainty when small subtasks carry equal weight.
+    k = len(stderrs)
+    return np.sqrt(sum([stderr**2 for stderr in stderrs])) / k
+
+
 def combined_sample_stderr(stderrs: List[float], sizes: List[int], metrics=None):
     assert metrics is not None, (
         "Need to pass a list of each subtask's metric for this stderr aggregation"

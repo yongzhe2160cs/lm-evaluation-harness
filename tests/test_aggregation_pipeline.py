@@ -343,6 +343,80 @@ class TestGroupStderrPipeline:
         assert isinstance(result.metrics["g"]["acc_stderr,none"], float)
         assert result.metrics["g"]["acc_stderr,none"] > 0
 
+    def test_unweighted_group_stderr_matches_unweighted_estimator(self):
+        """For weight_by_size=False, the group stderr must be the stderr of the
+        unweighted mean of subtask means (sqrt(sum se_i**2)/k), not the
+        size-weighted pooled stderr that accompanies the weighted mean.
+
+        Uses differently-sized tasks so the two estimators are numerically
+        distinguishable.
+        """
+        from lm_eval.api.metrics import (
+            mean_stderr,
+            pooled_sample_stderr,
+            unweighted_sample_stderr,
+        )
+
+        t1 = MockTask("t1", agg={"acc": mean}, n_eval_docs=4)
+        t2 = MockTask("t2", agg={"acc": mean}, n_eval_docs=8)
+
+        group = Group(
+            name="g",
+            aggregate_metric_list=[AggMetricConfig(metric="acc", weight_by_size=False)],
+        )
+        group.add(t1)
+        group.add(t2)
+
+        v1 = [1.0, 0.0, 1.0, 0.0]  # mean 0.5, n=4
+        v2 = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # mean 0.375, n=8
+        acc = {
+            "t1": _make_acc(t1, {("acc", "none"): v1}),
+            "t2": _make_acc(t2, {("acc", "none"): v2}),
+        }
+        result = _process_results(acc, groups={"g": group}, bootstrap_iters=100)
+
+        se1 = result.metrics["t1"]["acc_stderr,none"]
+        se2 = result.metrics["t2"]["acc_stderr,none"]
+        sizes = [4, 8]
+
+        expected = unweighted_sample_stderr([se1, se2])
+        pooled = pooled_sample_stderr([se1, se2], sizes)
+
+        group_se = result.metrics["g"]["acc_stderr,none"]
+        assert group_se == pytest.approx(expected)
+        # Sanity: the closed form is sqrt(se1**2 + se2**2)/2 ...
+        assert expected == pytest.approx(((se1**2 + se2**2) ** 0.5) / 2)
+        # ... and it is genuinely different from the (wrong) pooled value here.
+        assert group_se != pytest.approx(pooled)
+        assert se1 == pytest.approx(mean_stderr(v1))
+
+    def test_weighted_group_stderr_uses_pooled_estimator(self):
+        """weight_by_size=True must keep using the pooled (size-weighted) stderr."""
+        from lm_eval.api.metrics import pooled_sample_stderr
+
+        t1 = MockTask("t1", agg={"acc": mean}, n_eval_docs=4)
+        t2 = MockTask("t2", agg={"acc": mean}, n_eval_docs=8)
+
+        group = Group(
+            name="g",
+            aggregate_metric_list=[AggMetricConfig(metric="acc", weight_by_size=True)],
+        )
+        group.add(t1)
+        group.add(t2)
+
+        acc = {
+            "t1": _make_acc(t1, {("acc", "none"): [1.0, 0.0, 1.0, 0.0]}),
+            "t2": _make_acc(
+                t2, {("acc", "none"): [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+            ),
+        }
+        result = _process_results(acc, groups={"g": group}, bootstrap_iters=100)
+
+        se1 = result.metrics["t1"]["acc_stderr,none"]
+        se2 = result.metrics["t2"]["acc_stderr,none"]
+        expected = pooled_sample_stderr([se1, se2], [4, 8])
+        assert result.metrics["g"]["acc_stderr,none"] == pytest.approx(expected)
+
     def test_group_stderr_na_when_task_has_single_sample(self):
         """If a task has only 1 sample, its stderr is N/A → group stderr is N/A."""
         t1 = MockTask("t1", agg={"acc": mean}, n_eval_docs=1)
